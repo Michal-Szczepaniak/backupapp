@@ -1,0 +1,38 @@
+; profile name shown in the app's profile picker; profiles with an empty name are hidden
+name=
+
+; directory or block
+sourceType=
+
+; comma-separated list of paths, only used when sourceType=directory
+directory=
+
+; device path, only used when sourceType=block
+block=
+
+; only webdav is currently supported
+destinationType=
+
+; http or https
+webdavType=
+
+; webdav server hostname
+webdavHost=
+
+; Nextcloud DAV root, e.g. /nextcloud/remote.php/dav if Nextcloud is installed in a subdirectory; empty defaults to /remote.php/dav
+webdavRoot=
+
+; login name used to authenticate
+webdavUser=
+
+; webdav password
+webdavPassword=
+
+; Nextcloud user ID used in DAV paths (/remote.php/dav/files/<userid>/), can differ from webdavUser
+webdavUserId=
+
+; remote directory to upload backups to, e.g. /backupapp; each profile should use its own directory
+webdavPath=
+
+; number of newest backups to keep in webdavPath, older ones are deleted; empty or 0 keeps everything
+keepBackups=
