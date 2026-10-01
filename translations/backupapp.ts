@@ -125,6 +125,10 @@
         <source>Finished</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <source>Finished, reboot to apply the restore</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>RestoreService</name>
@@ -153,15 +157,7 @@
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>Could not rename %1 to %2: %3</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
         <source>Could not queue %1</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>Could not copy %1</source>
         <translation type="unfinished"></translation>
     </message>
 </context>

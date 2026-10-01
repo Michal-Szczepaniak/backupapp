@@ -192,6 +192,7 @@ void BackupService::startUpload()
     _destinationUrl = davUrl("/files/" + userId + _backupDir + fileName);
 
     _stagingDir = QStringLiteral("/tmp/backupapp-chunks");
+    QDir(_stagingDir).removeRecursively();
     QDir().mkpath(_stagingDir);
 
     _nextChunkIndex = 0;
@@ -219,7 +220,11 @@ void BackupService::onMkcolFinished()
     const QString errorString = _mkcolReply->errorString();
     const QVariant statusCode = _mkcolReply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
 
-    qDebug() << "MKCOL finished, status:" << statusCode << "error:" << errorString;
+    if (success)
+        qDebug() << "MKCOL finished, status:" << statusCode;
+    else
+        qDebug() << "MKCOL finished, status:" << statusCode << "error:" << _mkcolReply->error();
+    qDebug() << "Location:" << _mkcolReply->attribute(QNetworkRequest::RedirectionTargetAttribute);
 
     _mkcolReply->deleteLater();
     _mkcolReply = nullptr;
@@ -317,7 +322,10 @@ void BackupService::onChunkUploadFinished()
     const QString uploadedPath = _chunkFile->fileName();
     const QVariant statusCode = _chunkUploadReply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
 
-    qDebug() << "chunk" << _nextChunkIndex << "finished, status:" << statusCode << "error:" << errorString;
+    if (success)
+        qDebug() << "chunk" << _nextChunkIndex << "finished, status:" << statusCode;
+    else
+        qDebug() << "chunk" << _nextChunkIndex << "finished, status:" << statusCode << "error:" << _chunkUploadReply->error();
 
     _chunkUploadReply->deleteLater();
     _chunkUploadReply = nullptr;
@@ -372,7 +380,10 @@ void BackupService::onMoveFinished()
     const QString errorString = _moveReply->errorString();
     const QVariant statusCode = _moveReply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
 
-    qDebug() << "MOVE finished, status:" << statusCode << "error:" << errorString;
+    if (success)
+        qDebug() << "MOVE finished, status:" << statusCode;
+    else
+        qDebug() << "MOVE finished, status:" << statusCode << "error:" << _moveReply->error();
 
     _moveReply->deleteLater();
     _moveReply = nullptr;
@@ -441,7 +452,10 @@ void BackupService::onOldBackupRemoved()
 {
     QNetworkReply *reply = qobject_cast<QNetworkReply *>(sender());
 
-    qDebug() << "DELETE finished, status:" << reply->attribute(QNetworkRequest::HttpStatusCodeAttribute) << "error:" << reply->errorString();
+    if (reply->error() == QNetworkReply::NoError)
+        qDebug() << "DELETE finished, status:" << reply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
+    else
+        qDebug() << "DELETE finished, status:" << reply->attribute(QNetworkRequest::HttpStatusCodeAttribute) << "error:" << reply->error();
 
     reply->deleteLater();
 

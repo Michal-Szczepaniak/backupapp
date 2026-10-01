@@ -4,9 +4,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <algorithm>
-#include <cerrno>
 #include <cstdio>
-#include <cstring>
 #include <unistd.h>
 
 RestoreService::RestoreService(QObject *parent) : QObject(parent)
@@ -43,12 +41,12 @@ void RestoreService::restore(QString profile, QString backupFile)
 
     setupWebdav();
 
-    bool fullBackup = _settings->value("sourceType", "") == "directory" && _settings->value("directory") == "/data/.stowaways/sailfishos";
+    _fullBackup = _settings->value("fullSystemBackup", false).toBool();
     _backupFile = QDir::cleanPath("/" + _settings->value("webdavPath").toString()) + "/" + backupFile;
 
     setStage(Extracting);
 
-    if (fullBackup) {
+    if (_fullBackup) {
         restoreFullBackup();
     } else {
         restorePartialBackup();
@@ -133,10 +131,10 @@ void RestoreService::onRestoreFinished(int exitCode, QProcess::ExitStatus exitSt
 
         return;
     } else {
-        if (_settings->value("sourceType", "") == "directory" && _settings->value("directory") == "/data/.stowaways/sailfishos")
+        if (_fullBackup)
             activateFullRestore();
 
-        if (_stage != Error)
+        if (_stage != Error && _stage != RebootRequired)
             setStage(Finished);
     }
 }
@@ -276,7 +274,7 @@ void RestoreService::restorePartialBackup()
 
 void RestoreService::restoreFullBackup()
 {
-    const QString targetDir = QStringLiteral("/data/.stowaways/sailfishos-backup");
+    const QString targetDir = QStringLiteral("/backup");
 
     if (!QDir(targetDir).entryList(QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot).isEmpty()) {
         emit error(tr("%1 is not empty, remove it before restoring").arg(targetDir));
@@ -302,7 +300,6 @@ void RestoreService::restoreFullBackup()
         QStringLiteral("-"),
         QStringLiteral("-C"),
         targetDir,
-        QStringLiteral("--strip-components=3"),
         QStringLiteral("--xattrs"),
         QStringLiteral("--acls"),
         QStringLiteral("--numeric-owner"),
@@ -369,33 +366,18 @@ void RestoreService::restoreProgress(qint64 bytesReceived, qint64 bytesTotal)
 
 void RestoreService::activateFullRestore()
 {
-    const QString stowaways = QStringLiteral("/data/.stowaways");
-    const QString root = stowaways + "/sailfishos";
-    const QString oldRoot = stowaways + "/sailfishos-old";
-    const QString restoredRoot = stowaways + "/sailfishos-backup";
-    const QString removeJob = QStringLiteral("backupapp-remove-old-rootfs.sh");
+    const QString restoredRoot = QStringLiteral("/backup");
+    const QString swapJob = QStringLiteral("backupapp-swap-rootfs.sh");
 
-    if (::rename(QFile::encodeName(root).constData(), QFile::encodeName(oldRoot).constData()) != 0) {
-        emit error(tr("Could not rename %1 to %2: %3").arg(root, oldRoot, QString::fromLocal8Bit(::strerror(errno))));
-        return;
-    }
+    QDir().mkpath(restoredRoot + "/etc/oneshot.d/preinit");
 
-    if (::rename(QFile::encodeName(restoredRoot).constData(), QFile::encodeName(root).constData()) != 0) {
-        emit error(tr("Could not rename %1 to %2: %3").arg(restoredRoot, root, QString::fromLocal8Bit(::strerror(errno))));
-        return;
-    }
-
-    QDir().mkpath(root + "/etc/oneshot.d/preinit");
-    QDir().mkpath(root + "/etc/oneshot.d/0/late");
-    QDir().mkpath(root + "/usr/lib/oneshot.d");
-
-    const QFileInfoList updates = QDir(root + "/var/lib/platform-updates").entryInfoList(QDir::Files);
+    const QFileInfoList updates = QDir(restoredRoot + "/var/lib/platform-updates").entryInfoList(QDir::Files);
 
     for (const QFileInfo &update : updates) {
         if (!(update.permissions() & QFile::ExeOwner))
             continue;
 
-        const QString link = root + "/etc/oneshot.d/preinit/" + update.fileName();
+        const QString link = restoredRoot + "/etc/oneshot.d/preinit/" + update.fileName();
 
         QFile::remove(link);
 
@@ -405,27 +387,18 @@ void RestoreService::activateFullRestore()
         }
     }
 
-    const QString jobPath = root + "/usr/lib/oneshot.d/" + removeJob;
-    const QString jobLink = root + "/etc/oneshot.d/0/late/" + removeJob;
+    QDir().mkpath(QStringLiteral("/etc/oneshot.d/preinit"));
 
-    QFile::remove(jobPath);
-
-    if (!QFile::copy("/usr/lib/oneshot.d/" + removeJob, jobPath)) {
-        emit error(tr("Could not copy %1").arg(removeJob));
-        return;
-    }
-
-    QFile::setPermissions(jobPath, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner |
-                                   QFile::ReadGroup | QFile::ExeGroup | QFile::ReadOther | QFile::ExeOther);
+    const QString jobLink = "/etc/oneshot.d/preinit/" + swapJob;
 
     QFile::remove(jobLink);
 
-    if (!QFile::link("/usr/lib/oneshot.d/" + removeJob, jobLink)) {
-        emit error(tr("Could not queue %1").arg(removeJob));
+    if (!QFile::link("/usr/lib/oneshot.d/" + swapJob, jobLink)) {
+        emit error(tr("Could not queue %1").arg(swapJob));
         return;
     }
 
     ::sync();
 
-    emit rebootRequired();
+    setStage(RebootRequired);
 }

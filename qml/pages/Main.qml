@@ -105,6 +105,9 @@ Page {
                 id: info
                 text: ""
                 anchors.horizontalCenter: parent.horizontalCenter
+                width: parent.width - Theme.horizontalPageMargin*2
+                wrapMode: Text.Wrap
+                horizontalAlignment: Text.AlignHCenter
             }
 
             ProgressBar {

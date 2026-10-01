@@ -7,6 +7,9 @@ sourceType=
 ; comma-separated list of paths, only used when sourceType=directory
 directory=
 
+; true if directory lists the whole system (e.g. /bin,/boot,/etc,/home,/lib,/media,/opt,/root,/sbin,/srv,/usr,/var, plus /lib64 on aarch64); restore extracts to /backup and swaps it in on next boot instead of extracting over /
+fullSystemBackup=
+
 ; device path, only used when sourceType=block
 block=
 

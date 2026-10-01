@@ -12,7 +12,7 @@ Page {
     KeepAlive {
         id: keepAlive
 
-        enabled: backupService.stage !== BackupService.Idle
+        enabled: restoreService.stage === RestoreService.Extracting
     }
 
     Notification {
@@ -26,8 +26,8 @@ Page {
         target: restoreService
 
         onError: {
-            info.text = error
-            errorNotification.body = error
+            info.text = message
+            errorNotification.body = message
             errorNotification.publish()
         }
 
@@ -61,6 +61,8 @@ Page {
                 info.text = qsTr("Extracting…");
             } else if (stage === RestoreService.Finished) {
                 info.text = qsTr("Finished");
+            } else if (stage === RestoreService.RebootRequired) {
+                info.text = qsTr("Finished, reboot to apply the restore");
             }
         }
     }
@@ -122,6 +124,9 @@ Page {
                 id: info
                 text: ""
                 anchors.horizontalCenter: parent.horizontalCenter
+                width: parent.width - Theme.horizontalPageMargin*2
+                wrapMode: Text.Wrap
+                horizontalAlignment: Text.AlignHCenter
             }
 
             ProgressBar {

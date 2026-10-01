@@ -13,7 +13,7 @@ class RestoreService : public QObject
     Q_PROPERTY(float restoreProgress READ getRestoreProgress NOTIFY restoreProgressChanged)
     Q_PROPERTY(Stage stage READ getStage NOTIFY stageChanged)
 public:
-    enum Stage { Idle, Extracting, Error, Finished };
+    enum Stage { Idle, Extracting, Error, Finished, RebootRequired };
     Q_ENUM(Stage)
 
     explicit RestoreService(QObject *parent = nullptr);
@@ -31,7 +31,6 @@ signals:
     void restoreProgressChanged(float progress);
     void restoreEtaChanged(qint64 etaMs);
     void stageChanged(Stage stage);
-    void rebootRequired();
 
 public slots:
     void onGotFilesList();
@@ -55,6 +54,7 @@ private:
     QWebdavDirParser _parser{};
     QProcess *_restoreProcess = nullptr;
     QString _backupFile{};
+    bool _fullBackup = false;
     QNetworkReply *_backupFileReply = nullptr;
     float _restoreProgress = 0;
     QElapsedTimer _restoreTimer;

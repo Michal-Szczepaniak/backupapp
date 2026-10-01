@@ -38,11 +38,11 @@ desktop-file-install --delete-original --dir %{buildroot}%{_datadir}/application
 %{_bindir}/%{name}
 %defattr(-,root,root,-)
 %dir %{_sysconfdir}/%{name}
-%{_sysconfdir}/%{name}/profile.conf.example
-%{_sysconfdir}/%{name}/full-webdav.conf
-%{_sysconfdir}/%{name}/home-rsync.conf
-%{_sysconfdir}/%{name}/home-webdav.conf
+%config(noreplace) %{_sysconfdir}/%{name}/profile.conf.example
+%config(noreplace) %{_sysconfdir}/%{name}/full-webdav.conf
+%config(noreplace) %{_sysconfdir}/%{name}/home-rsync.conf
+%config(noreplace) %{_sysconfdir}/%{name}/home-webdav.conf
 %{_datadir}/%{name}
 %{_datadir}/applications/%{name}.desktop
 %{_datadir}/icons/hicolor/*/apps/%{name}.png
-%attr(0755,root,root) /usr/lib/oneshot.d/backupapp-remove-old-rootfs.sh
+%attr(0755,root,root) /usr/lib/oneshot.d/backupapp-swap-rootfs.sh

@@ -48,7 +48,7 @@ profileconf.path = /etc/backupapp
 
 INSTALLS += profileconf
 
-oneshot.files = backupapp-remove-old-rootfs.sh
+oneshot.files = backupapp-swap-rootfs.sh
 oneshot.path = /usr/lib/oneshot.d
 
 INSTALLS += oneshot
