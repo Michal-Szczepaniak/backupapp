@@ -473,6 +473,11 @@ bool BackupService::validateWebDavSettings()
            _settings->contains("webdavPath");
 }
 
+bool BackupService::validateRsyncSettings()
+{
+    return _settings->contains("rsyncPath");
+}
+
 bool BackupService::validateSourceSettings()
 {
     QString sourceType = _settings->value("sourceType", "").toString();
@@ -512,7 +517,7 @@ void BackupService::backup(QString profile)
     }
 
     QString destinationType = _settings->value("destinationType", "").toString();
-    if (!QStringList{"webdav"}.contains(destinationType)) {
+    if (!QStringList{"webdav", "rsync"}.contains(destinationType)) {
         emit backupFinished(false, "Invalid backup destination type");
         return;
     }
@@ -528,6 +533,22 @@ void BackupService::backup(QString profile)
         }
 
         buildSourceStream();
+    } else if (destinationType == "rsync") {
+        if (sourceType != "directory") {
+            emit backupFinished(false, "rsync only supports directory sources");
+            return;
+        }
+
+        if (!validateRsyncSettings()) {
+            emit backupFinished(false, "Missing rsync settings");
+            return;
+        }
+
+        if (!validateSourceSettings()) {
+            return;
+        }
+
+        startRsync();
     }
 }
 
@@ -583,6 +604,112 @@ void BackupService::onSplitFinished(int exitCode, QProcess::ExitStatus exitStatu
 
     _splitFinished = true;
     tryUploadNextChunk();
+}
+
+void BackupService::startRsync()
+{
+    setStage(Uploading);
+
+    QString port = _settings->value("rsyncPort").toString();
+
+    if (port.isEmpty())
+        port = QStringLiteral("22");
+
+    const QString ssh = QStringLiteral("ssh -p %1 -i %2 -o BatchMode=yes").arg(port, _settings->value("rsyncKey").toString());
+    const QString host = _settings->value("rsyncHost").toString();
+    const QString user = _settings->value("rsyncUser").toString();
+
+    QString destination = _settings->value("rsyncPath").toString() + "/";
+
+    if (!host.isEmpty())
+        destination.prepend(host + ":");
+
+    if (!host.isEmpty() && !user.isEmpty())
+        destination.prepend(user + "@");
+
+    QStringList arguments = {
+        QStringLiteral("-aAXHR"),
+        QStringLiteral("--info=progress2"),
+        QStringLiteral("--no-inc-recursive"),
+    };
+
+    if (!host.isEmpty())
+        arguments += {QStringLiteral("-e"), ssh};
+
+    arguments += _settings->value("rsyncBackupOptions").toString().split(QLatin1Char(' '), QString::SkipEmptyParts);
+    arguments += _settings->value("directory").toStringList();
+    arguments += destination;
+
+    qDebug() << "rsync" << arguments;
+
+    _rsyncOutput.clear();
+    _lastEtaMs = -1;
+
+    _rsyncProcess = new QProcess(this);
+    _rsyncProcess->setProcessChannelMode(QProcess::ForwardedErrorChannel);
+    _rsyncProcess->setProgram(QStringLiteral("rsync"));
+    _rsyncProcess->setArguments(arguments);
+
+    connect(_rsyncProcess, &QProcess::readyReadStandardOutput, this, &BackupService::onRsyncOutput);
+
+    connect(_rsyncProcess, static_cast<void (QProcess::*)(int, QProcess::ExitStatus)>(&QProcess::finished),
+            this, &BackupService::onRsyncFinished);
+
+    connect(_rsyncProcess, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart)
+            finishUpload(false, _rsyncProcess->errorString());
+    });
+
+    _rsyncProcess->start();
+}
+
+void BackupService::onRsyncOutput()
+{
+    _rsyncOutput += _rsyncProcess->readAllStandardOutput();
+
+    const int lineEnd = qMax(_rsyncOutput.lastIndexOf('\r'), _rsyncOutput.lastIndexOf('\n'));
+
+    if (lineEnd < 0)
+        return;
+
+    const QString lines = QString::fromUtf8(_rsyncOutput.left(lineEnd));
+    _rsyncOutput.remove(0, lineEnd + 1);
+
+    static const QRegularExpression progressPattern(QStringLiteral("(\\d+)%\\s+\\S+\\s+(\\d+):(\\d+):(\\d+)(\\s+\\(xfr#)?"));
+
+    QRegularExpressionMatchIterator it = progressPattern.globalMatch(lines);
+    QRegularExpressionMatch match;
+
+    while (it.hasNext()) {
+        match = it.next();
+
+        if (match.captured(5).isEmpty()) {
+            const qint64 etaSeconds = (match.captured(2).toLongLong() * 60 + match.captured(3).toLongLong()) * 60 + match.captured(4).toLongLong();
+            _lastEtaMs = etaSeconds * 1000;
+        }
+    }
+
+    if (!match.hasMatch())
+        return;
+
+    const qint64 percent = match.captured(1).toLongLong();
+
+    emit backupProgress(qMin<qint64>(percent, 99), 100, _lastEtaMs);
+}
+
+void BackupService::onRsyncFinished(int exitCode, QProcess::ExitStatus exitStatus)
+{
+    if (exitStatus != QProcess::NormalExit) {
+        finishUpload(false, QStringLiteral("rsync crashed"));
+        return;
+    }
+
+    if (exitCode != 0 && exitCode != 24) {
+        finishUpload(false, QStringLiteral("rsync exited with code %1").arg(exitCode));
+        return;
+    }
+
+    finishUpload(true, QString());
 }
 
 void BackupService::finishUpload(bool success, const QString &error)
@@ -667,6 +794,15 @@ void BackupService::finishUpload(bool success, const QString &error)
         _readProcess = nullptr;
     }
 
+    if (_rsyncProcess) {
+        disconnect(_rsyncProcess, nullptr, this, nullptr);
+
+        _rsyncProcess->kill();
+        _rsyncProcess->waitForFinished(1000);
+        _rsyncProcess->deleteLater();
+        _rsyncProcess = nullptr;
+    }
+
     if (_webdav) {
         if (success) {
             _webdav->deleteLater();
@@ -690,7 +826,8 @@ void BackupService::finishUpload(bool success, const QString &error)
         _webdav = nullptr;
     }
 
-    QDir(_stagingDir).removeRecursively();
+    if (!_stagingDir.isEmpty())
+        QDir(_stagingDir).removeRecursively();
 
     emit backupFinished(success, error);
 }

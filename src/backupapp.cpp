@@ -19,7 +19,7 @@ int main(int argc, char *argv[])
 
     if (setuid(0)) {
         perror("setuid");
-        exit(1);
+//        exit(1);
     }
 
     qmlRegisterUncreatableType<BackupService>("backupapp", 1, 0, "BackupService", QStringLiteral("Use the backupService context property"));

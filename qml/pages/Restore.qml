@@ -18,7 +18,7 @@ Page {
     Notification {
          id: errorNotification
 
-         summary: qsTr("Musikilo")
+         summary: qsTr("Backupapp")
          replacesId: 1
     }
 

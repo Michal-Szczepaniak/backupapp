@@ -6,10 +6,37 @@ Page {
 
     allowedOrientations: Orientation.All
 
+    property string newProfileFile: ""
+
+    onStatusChanged: {
+        if (status !== PageStatus.Active)
+            return
+
+        profilesList.model = settings.getProfiles()
+
+        if (newProfileFile !== "") {
+            pageStack.animatorPush(Qt.resolvedUrl("ProfileSettings.qml"), {filename: newProfileFile})
+            newProfileFile = ""
+        }
+    }
+
     SilicaFlickable {
         anchors.fill: parent
 
         contentHeight: column.height
+
+        PullDownMenu {
+            MenuItem {
+                text: qsTr("Add profile")
+                onClicked: {
+                    var dialog = pageStack.push(Qt.resolvedUrl("NewProfileDialog.qml"))
+
+                    dialog.accepted.connect(function() {
+                        newProfileFile = settings.createProfile(dialog.name.trim())
+                    })
+                }
+            }
+        }
 
         Column {
             id: column
@@ -18,14 +45,61 @@ Page {
             spacing: Theme.paddingLarge
 
             PageHeader {
+                id: header
                 title: qsTr("Settings")
             }
 
             Label {
-                x: Theme.horizontalPageMargin
-                text: qsTr("Edit /etc/backupapp/ to configure this app.")
+                id: infoLabel
+
                 color: Theme.secondaryHighlightColor
-                font.pixelSize: Theme.fontSizeExtraLarge
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: parent.width - Theme.horizontalPageMargin*2
+                wrapMode: Text.Wrap
+                horizontalAlignment: Text.AlignHCenter
+
+                text: qsTr("You can edit files in /etc/backupapp/ to configure this app.")
+            }
+
+            Item {
+                height: Theme.itemSizeLarge
+                width: 1
+            }
+
+            Repeater {
+                id: profilesList
+
+                model: settings.getProfiles()
+
+                delegate: ListItem {
+
+                    DetailItem {
+                        id: detailItem
+                        anchors.centerIn: parent
+
+                        label: modelData.name
+                        value: modelData.file
+                    }
+
+                    onClicked: {
+                        pageStack.animatorPush(Qt.resolvedUrl("ProfileSettings.qml"), {filename: modelData.file})
+                    }
+
+                    menu: ContextMenu {
+                        MenuItem {
+                            text: qsTr("Delete")
+
+                            onClicked: {
+                                var file = modelData.file
+
+                                remorseAction(qsTr("Deleting"), function() {
+                                    settings.deleteProfile(file)
+                                    profilesList.model = settings.getProfiles()
+                                })
+                            }
+                        }
+                    }
+                }
             }
         }
     }

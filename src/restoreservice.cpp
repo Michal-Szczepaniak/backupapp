@@ -3,6 +3,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <algorithm>
 #include <cstdio>
 #include <unistd.h>
@@ -24,32 +25,47 @@ void RestoreService::restore(QString profile, QString backupFile)
 
     _settings = new QSettings("/etc/backupapp/" + profile, QSettings::IniFormat);
 
-    bool isWebdav = _settings->value("destinationType", "") == "webdav";
-    if (!isWebdav) {
-        emit error(tr("Only restore from webdav is currently supported!"));
-        return;
-    }
+    const QString destinationType = _settings->value("destinationType", "").toString();
 
-    if (!validateWebDavSettings() || !validateSourceSettings()) {
-        return;
-    }
+    if (destinationType == "rsync") {
+        if (!validateRsyncSettings() || !validateSourceSettings()) {
+            return;
+        }
 
-    if (_settings->value("sourceType", "") != "directory") {
-        emit error(tr("Only directory type backups are supported!"));
-        return;
-    }
+        if (_settings->value("sourceType", "") != "directory") {
+            emit error(tr("Only directory type backups are supported!"));
+            return;
+        }
 
-    setupWebdav();
+        _fullBackup = _settings->value("fullSystemBackup", false).toBool();
 
-    _fullBackup = _settings->value("fullSystemBackup", false).toBool();
-    _backupFile = QDir::cleanPath("/" + _settings->value("webdavPath").toString()) + "/" + backupFile;
+        setStage(Extracting);
 
-    setStage(Extracting);
+        restoreRsyncBackup();
+    } else if (destinationType == "webdav") {
+        if (!validateWebDavSettings() || !validateSourceSettings()) {
+            return;
+        }
 
-    if (_fullBackup) {
-        restoreFullBackup();
+        if (_settings->value("sourceType", "") != "directory") {
+            emit error(tr("Only directory type backups are supported!"));
+            return;
+        }
+
+        setupWebdav();
+
+        _fullBackup = _settings->value("fullSystemBackup", false).toBool();
+        _backupFile = QDir::cleanPath("/" + _settings->value("webdavPath").toString()) + "/" + backupFile;
+
+        setStage(Extracting);
+
+        if (_fullBackup) {
+            restoreFullBackup();
+        } else {
+            restorePartialBackup();
+        }
     } else {
-        restorePartialBackup();
+        emit error(tr("Only restore from webdav and rsync is currently supported!"));
     }
 }
 
@@ -61,21 +77,27 @@ void RestoreService::getBackups(QString profile)
 
     _settings = new QSettings("/etc/backupapp/" + profile, QSettings::IniFormat);
 
-    bool isWebdav = _settings->value("destinationType", "") == "webdav";
-    if (!isWebdav) {
-        emit error(tr("Only restore from webdav is currently supported!"));
-        return;
+    const QString destinationType = _settings->value("destinationType", "").toString();
+
+    if (destinationType == "rsync") {
+        if (!validateRsyncSettings() || !validateSourceSettings()) {
+            return;
+        }
+
+        emit gotBackupFilesList({_settings->value("rsyncPath").toString()});
+    } else if (destinationType == "webdav") {
+        if (!validateWebDavSettings() || !validateSourceSettings()) {
+            return;
+        }
+
+        setupWebdav();
+
+        const QString backupDir = QDir::cleanPath("/" + _settings->value("webdavPath").toString()) + "/";
+
+        _parser.listDirectory(_webdav, backupDir, 1);
+    } else {
+        emit error(tr("Only restore from webdav and rsync is currently supported!"));
     }
-
-    if (!validateWebDavSettings() || !validateSourceSettings()) {
-        return;
-    }
-
-    setupWebdav();
-
-    const QString backupDir = QDir::cleanPath("/" + _settings->value("webdavPath").toString()) + "/";
-
-    _parser.listDirectory(_webdav, backupDir, 1);
 }
 
 float RestoreService::getRestoreProgress() const
@@ -163,6 +185,17 @@ bool RestoreService::validateWebDavSettings()
            _settings->contains("webdavPassword") &&
            _settings->contains("webdavUserId") &&
            _settings->contains("webdavPath");
+
+    if (!result) {
+        emit error(tr("Invalid profile configuration"));
+    }
+
+    return result;
+}
+
+bool RestoreService::validateRsyncSettings()
+{
+    bool result = _settings->contains("rsyncPath");
 
     if (!result) {
         emit error(tr("Invalid profile configuration"));
@@ -401,4 +434,112 @@ void RestoreService::activateFullRestore()
     ::sync();
 
     setStage(RebootRequired);
+}
+
+void RestoreService::restoreRsyncBackup()
+{
+    QString targetDir = QStringLiteral("/");
+
+    if (_fullBackup) {
+        targetDir = QStringLiteral("/backup");
+
+        if (!QDir(targetDir).entryList(QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot).isEmpty()) {
+            emit error(tr("%1 is not empty, remove it before restoring").arg(targetDir));
+            return;
+        }
+
+        if (!QDir().mkpath(targetDir)) {
+            emit error(tr("Could not create %1").arg(targetDir));
+            return;
+        }
+    }
+
+    QString port = _settings->value("rsyncPort").toString();
+
+    if (port.isEmpty())
+        port = QStringLiteral("22");
+
+    const QString ssh = QStringLiteral("ssh -p %1 -i %2 -o BatchMode=yes").arg(port, _settings->value("rsyncKey").toString());
+    const QString host = _settings->value("rsyncHost").toString();
+    const QString user = _settings->value("rsyncUser").toString();
+
+    QString sourcePrefix = _settings->value("rsyncPath").toString() + "/.";
+
+    if (!host.isEmpty())
+        sourcePrefix.prepend(host + ":");
+
+    if (!host.isEmpty() && !user.isEmpty())
+        sourcePrefix.prepend(user + "@");
+
+    QStringList arguments = {
+        QStringLiteral("-aAXHR"),
+        QStringLiteral("--numeric-ids"),
+        QStringLiteral("--info=progress2"),
+        QStringLiteral("--no-inc-recursive"),
+    };
+
+    if (!host.isEmpty())
+        arguments += {QStringLiteral("-e"), ssh};
+
+    arguments += _settings->value("rsyncRestoreOptions").toString().split(QLatin1Char(' '), QString::SkipEmptyParts);
+
+    for (const QString &directory : _settings->value("directory").toStringList())
+        arguments += sourcePrefix + QDir::cleanPath("/" + directory.trimmed());
+
+    arguments += targetDir;
+
+    qDebug() << "rsync" << arguments;
+
+    if (_restoreProcess) {
+        disconnect(_restoreProcess, nullptr, this, nullptr);
+        _restoreProcess->kill();
+        _restoreProcess->deleteLater();
+    }
+
+    _rsyncOutput.clear();
+
+    _restoreProcess = new QProcess(this);
+    _restoreProcess->setProcessChannelMode(QProcess::ForwardedErrorChannel);
+    _restoreProcess->setProgram(QStringLiteral("rsync"));
+    _restoreProcess->setArguments(arguments);
+
+    connect(_restoreProcess, static_cast<void (QProcess::*)(int, QProcess::ExitStatus)>(&QProcess::finished),this, &RestoreService::onRestoreFinished);
+    connect(_restoreProcess, &QProcess::errorOccurred, this, &RestoreService::onTarError);
+    connect(_restoreProcess, &QProcess::readyReadStandardOutput, this, &RestoreService::onRsyncOutput);
+
+    _restoreProcess->start();
+}
+
+void RestoreService::onRsyncOutput()
+{
+    _rsyncOutput += _restoreProcess->readAllStandardOutput();
+
+    const int lineEnd = qMax(_rsyncOutput.lastIndexOf('\r'), _rsyncOutput.lastIndexOf('\n'));
+
+    if (lineEnd < 0)
+        return;
+
+    const QString lines = QString::fromUtf8(_rsyncOutput.left(lineEnd));
+    _rsyncOutput.remove(0, lineEnd + 1);
+
+    static const QRegularExpression progressPattern(QStringLiteral("(\\d+)%\\s+\\S+\\s+(\\d+):(\\d+):(\\d+)(\\s+\\(xfr#)?"));
+
+    QRegularExpressionMatchIterator it = progressPattern.globalMatch(lines);
+    QRegularExpressionMatch match;
+
+    while (it.hasNext()) {
+        match = it.next();
+
+        if (match.captured(5).isEmpty()) {
+            const qint64 etaSeconds = (match.captured(2).toLongLong() * 60 + match.captured(3).toLongLong()) * 60 + match.captured(4).toLongLong();
+            emit restoreEtaChanged(etaSeconds * 1000);
+        }
+    }
+
+    if (!match.hasMatch())
+        return;
+
+    _restoreProgress = match.captured(1).toFloat();
+
+    emit restoreProgressChanged(_restoreProgress);
 }

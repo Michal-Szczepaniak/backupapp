@@ -21,6 +21,8 @@ SOURCES += qwebdavlib/qwebdavlib/qwebdav.cpp \
 DISTFILES += qml/backupapp.qml \
     qml/cover/CoverPage.qml \
     qml/pages/Main.qml \
+    qml/pages/ProfileSettings.qml \
+    qml/pages/NewProfileDialog.qml \
     qml/pages/Settings.qml \
     qml/pages/Restore.qml \
     rpm/backupapp.spec \

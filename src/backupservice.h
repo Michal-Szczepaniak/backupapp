@@ -41,6 +41,8 @@ private slots:
     void onBackupListFinished();
     void onOldBackupRemoved();
     void tryUploadNextChunk();
+    void onRsyncOutput();
+    void onRsyncFinished(int exitCode, QProcess::ExitStatus exitStatus);
 
 private:
     qint64 directorySize(const QString &path) const;
@@ -59,11 +61,15 @@ private:
     void setStage(Stage stage);
     bool validateWebDavSettings();
     bool validateSourceSettings();
+    bool validateRsyncSettings();
+    void startRsync();
 
 private:
     QProcess *_sizeProcess = nullptr;
     QProcess *_readProcess = nullptr;
     QProcess *_splitProcess = nullptr;
+    QProcess *_rsyncProcess = nullptr;
+    QByteArray _rsyncOutput;
     QWebdav *_webdav = nullptr;
     QNetworkReply *_mkcolReply = nullptr;
     QNetworkReply *_chunkUploadReply = nullptr;

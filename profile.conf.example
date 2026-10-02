@@ -13,7 +13,7 @@ fullSystemBackup=
 ; device path, only used when sourceType=block
 block=
 
-; only webdav is currently supported
+; webdav or rsync; rsync only supports sourceType=directory
 destinationType=
 
 ; http or https
@@ -37,5 +37,26 @@ webdavUserId=
 ; remote directory to upload backups to, e.g. /backupapp; each profile should use its own directory
 webdavPath=
 
-; number of newest backups to keep in webdavPath, older ones are deleted; empty or 0 keeps everything
+; number of newest backups to keep in webdavPath, older ones are deleted; empty or 0 keeps everything; webdav only
 keepBackups=
+
+; ssh host, only used when destinationType=rsync; empty syncs to a local rsyncPath instead, e.g. an SD card
+rsyncHost=
+
+; ssh login name, empty leaves out the user@ part and lets ssh pick the user
+rsyncUser=
+
+; ssh port, empty defaults to 22
+rsyncPort=
+
+; remote directory to sync into, e.g. /srv/backup/phone; each profile should use its own directory
+rsyncPath=
+
+; private key used to log in, must not require a passphrase
+rsyncKey=
+
+; extra rsync arguments used when backing up, separated by spaces, e.g. "--delete --exclude=.cache -M--fake-super"; quote the value if it contains commas
+rsyncBackupOptions=
+
+; extra rsync arguments used when restoring, separated by spaces, e.g. "-M--fake-super"; restore pulls into / (or /backup with fullSystemBackup), so --delete there removes everything not in the backup
+rsyncRestoreOptions=

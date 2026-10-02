@@ -1,7 +1,8 @@
 # backupapp
 
 A backup and restore app for **Sailfish OS**. It streams your home directory, your whole system, or a raw partition
-straight to a WebDAV server (Nextcloud), with no full-size temporary archive stored on the phone.
+straight to a WebDAV server (Nextcloud), with no full-size temporary archive stored on the phone, or syncs directories
+to a server over SSH with `rsync`.
 
 > [!WARNING]
 > Parts of this app were written with the help of an LLM (Anthropic's Claude). LLM-generated code can contain subtle
@@ -23,12 +24,15 @@ straight to a WebDAV server (Nextcloud), with no full-size temporary archive sto
   - *Partial (home) backups* are streamed and extracted live into `/`
   - *Full system backups* (`fullSystemBackup=true`) are extracted into `/backup` and swapped into `/` by a preinit
     oneshot on the next boot, see [Full system restore](#full-system-restore)
+- **rsync over SSH**: `directory` sources can be mirrored to a server with `rsync` instead, see [rsync](#rsync)
 
 ## Requirements
 
 - Sailfish OS device
 - A Nextcloud (or compatible) WebDAV server with chunked-upload support
 - Runtime tools (pulled in by the RPM): `tar`, `gzip`, `coreutils`, `util-linux`, `curl`
+- For rsync profiles: `rsync` (3.1 or newer) and an SSH client on the phone (not pulled in by the RPM), and `rsync`
+  on the server
 
 ## Building
 
@@ -42,8 +46,13 @@ or open `backupapp.pro` in the Sailfish IDE. `qwebdavlib` is bundled and compile
 
 ## Configuration
 
-The app has no settings UI (yet). Profiles are INI-style files in `/etc/backupapp/*.conf`, edited as root.
-Profiles with an empty `name=` are hidden from the app.
+Profiles are INI-style files in `/etc/backupapp/*.conf`. They can be edited by hand as root, or in the app under
+pull down → **Settings**, where you can also add profiles (pull down → **Add profile**) and delete them (long press →
+**Delete**). Profiles with an empty `name=` are hidden from the app, including the Settings page.
+
+> [!NOTE]
+> Saving a profile from the app rewrites the file through `QSettings`, which drops all `;` comments and may reorder
+> keys.
 
 The package installs a few examples:
 
@@ -52,7 +61,7 @@ The package installs a few examples:
 | `profile.conf.example` | Every key, with explanations                             |
 | `home-webdav.conf`     | Home directory → WebDAV, keeps 7 backups                 |
 | `full-webdav.conf`     | Full system → WebDAV, keeps 3 backups                    |
-| `home-rsync.conf`      | Home directory → rsync over SSH (*planned, not yet supported*) |
+| `home-rsync.conf`      | Home directory → rsync over SSH                          |
 
 Minimal example:
 
@@ -83,7 +92,7 @@ keepBackups=7
 | `directory`       | Comma-separated list of paths (for `directory`)                                              |
 | `fullSystemBackup`| `true` if `directory` lists the whole system; enables [full system restore](#full-system-restore) |
 | `block`           | Device path, e.g. `/dev/sda12` (for `block`)                                                 |
-| `destinationType` | `webdav` (the only one supported right now)                                                  |
+| `destinationType` | `webdav` or `rsync`                                                                          |
 | `webdavType`      | `http` or `https`                                                                            |
 | `webdavHost`      | Server hostname                                                                              |
 | `webdavRoot`      | DAV root; empty defaults to `/remote.php/dav`                                                |
@@ -91,13 +100,20 @@ keepBackups=7
 | `webdavPassword`  | Password (an app password is recommended)                                                    |
 | `webdavUserId`    | Nextcloud user ID used in DAV paths; can be different from `webdavUser`                      |
 | `webdavPath`      | Remote directory for this profile's backups; use a separate one for each profile             |
-| `keepBackups`     | Number of backups to keep; empty or `0` keeps everything                                     |
+| `keepBackups`     | Number of backups to keep; empty or `0` keeps everything (WebDAV only)                       |
+| `rsyncHost`       | SSH host; empty syncs to a local `rsyncPath` instead (e.g. an SD card)                       |
+| `rsyncUser`       | SSH login; empty leaves out the `user@` part                                                 |
+| `rsyncPort`       | SSH port; empty defaults to `22`                                                             |
+| `rsyncPath`       | Remote directory to sync into; use a separate one for each profile                           |
+| `rsyncKey`        | Private key used to log in; must not require a passphrase                                    |
+| `rsyncBackupOptions`  | Extra `rsync` arguments for backups, separated by spaces                                 |
+| `rsyncRestoreOptions` | Extra `rsync` arguments for restores, separated by spaces                                |
 
 Backups are named `backup-<profile-slug>-YYYY-MM-DD_HH-mm-ss.tar.gz` (or `.img.gz` for block devices).
 
 ## Usage
 
-1. Create a profile in `/etc/backupapp/`.
+1. Create a profile in **Settings** or by hand in `/etc/backupapp/`.
 2. Open **backupapp**, pick the profile, and tap **Backup now!**
 3. To restore, pull down → **Restore**, pick the profile and a backup file, and tap **Restore backup**.
 
@@ -117,6 +133,31 @@ tar -czf - …   ─┐
 
 `split` is paused (`SIGSTOP`) when 3 chunks are waiting and resumed once the upload catches up. This keeps disk
 usage on the phone low.
+
+## rsync
+
+With `destinationType=rsync`, the directories in `directory=` are synced to `rsyncUser@rsyncHost:rsyncPath`
+(`rsyncHost:rsyncPath` without a user, or just the local `rsyncPath` without a host, in which case no SSH is used) with:
+
+```sh
+rsync -aAXHR --info=progress2 --no-inc-recursive -e "ssh -p <rsyncPort> -i <rsyncKey> -o BatchMode=yes" <rsyncBackupOptions> <directories> <destination>
+```
+
+- The server keeps a single mirror, not dated backups. `keepBackups` doesn't apply.
+- `-R` keeps full paths, so `/home/defaultuser` ends up in `rsyncPath/home/defaultuser`.
+- Nothing is deleted on the server unless you add `--delete` (and `--delete-excluded`) to `rsyncBackupOptions`.
+- `rsync` exit code 24 (files vanished during the transfer) counts as success.
+- Options are split on spaces with no shell quoting, so `--rsync-path="rsync --fake-super"` doesn't work. Use
+  `-M--fake-super` instead, in both `rsyncBackupOptions` and `rsyncRestoreOptions`.
+- SSH runs in batch mode and can't ask questions. Log in to the server once by hand as root first, so its host key
+  is in `known_hosts`.
+
+**Restore** pulls back only the directories listed in `directory=` (as `rsyncPath/./<directory>`) with
+`rsync -aAXHR --numeric-ids` and `rsyncRestoreOptions`, into `/`, or into `/backup` for full system profiles, which
+then continue as in [Full system restore](#full-system-restore). The target directory itself is never synced, so `/`
+and `/backup` keep their own owner, permissions and SELinux label. The restore page shows `rsyncPath` as the only
+backup to pick. `rsyncRestoreOptions` is separate from `rsyncBackupOptions` so you can choose whether a restore deletes
+files that aren't in the backup.
 
 ## Full system restore
 
@@ -171,6 +212,8 @@ Don't list `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/data`, `/mnt` or Android p
 - WebDAV passwords are stored **in plain text** in `/etc/backupapp/*.conf`. Use a Nextcloud app password and keep
   the files readable by root only.
 - Restoring a partial backup extracts into `/` as root and overwrites existing files.
+- The SSH key for rsync profiles has no passphrase. Anyone who can read it can log in to the server, so keep it
+  readable by root only.
 
 ## Status / roadmap
 
@@ -178,9 +221,9 @@ Don't list `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/data`, `/mnt` or Android p
 - [x] Retention (`keepBackups`)
 - [x] Restore of directory backups from WebDAV
 - [x] Full system restore via a preinit swap
-- [ ] rsync
+- [x] rsync over SSH, backup and restore
 - [ ] Scheduled backups
-- [ ] Settings UI
+- [x] Settings UI for creating, editing and deleting profiles
 
 ## Credits
 

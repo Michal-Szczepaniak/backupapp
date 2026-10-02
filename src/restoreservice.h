@@ -38,15 +38,18 @@ public slots:
     void onTarError(QProcess::ProcessError error);
     void feedBackupData();
     void restoreProgress(qint64 bytesReceived, qint64 bytesTotal);
+    void onRsyncOutput();
 
 private:
     bool validateWebDavSettings();
     bool validateSourceSettings();
+    bool validateRsyncSettings();
     QString getBackupPrefix();
     void setupWebdav();
     void restorePartialBackup();
     void restoreFullBackup();
     void activateFullRestore();
+    void restoreRsyncBackup();
 
 private:
     QSettings *_settings = nullptr;
@@ -56,6 +59,7 @@ private:
     QString _backupFile{};
     bool _fullBackup = false;
     QNetworkReply *_backupFileReply = nullptr;
+    QByteArray _rsyncOutput;
     float _restoreProgress = 0;
     QElapsedTimer _restoreTimer;
     Stage _stage = Idle;

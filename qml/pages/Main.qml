@@ -8,6 +8,11 @@ Page {
 
     allowedOrientations: Orientation.All
 
+    onStatusChanged: {
+        if (status === PageStatus.Active)
+            profilesRepeater.model = settings.getProfiles()
+    }
+
     KeepAlive {
         id: keepAlive
 
@@ -90,6 +95,8 @@ Page {
 
                 menu: ContextMenu {
                     Repeater {
+                        id: profilesRepeater
+
                         model: settings.getProfiles()
 
                         MenuItem {
