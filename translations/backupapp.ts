@@ -2,6 +2,33 @@
 <!DOCTYPE TS>
 <TS version="2.1">
 <context>
+    <name>About</name>
+    <message>
+        <source>About</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Licensed under GPLv3</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Links</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Donate</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Made by Michał Szczepaniak.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Icon by gregguh.</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
     <name>CoverPage</name>
     <message>
         <source>calculating…</source>
@@ -84,6 +111,14 @@
     </message>
     <message>
         <source>Restore</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Only %1 GB free on the root partition. A full system restore needs room for a second copy of the system, so you may not be able to restore this backup.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>About</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
@@ -284,6 +319,18 @@
     </message>
     <message>
         <source>Only restore from webdav and rsync is currently supported!</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Could not unmount /backup/home, remove it before rebooting</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Could not keep %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Could not bind %1 to %2: %3</source>
         <translation type="unfinished"></translation>
     </message>
 </context>

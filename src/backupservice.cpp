@@ -1,3 +1,22 @@
+/*
+    Copyright (C) 2026 Michał Szczepaniak
+
+    This file is part of backupapp.
+
+    backupapp is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    backupapp is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with backupapp.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
 #include "backupservice.h"
 
 #include <QDateTime>
@@ -9,6 +28,7 @@
 #include <QRegularExpression>
 #include <QTimer>
 #include <csignal>
+#include <sys/mount.h>
 
 BackupService::BackupService(QObject *parent) : QObject(parent)
 {
@@ -62,6 +82,11 @@ void BackupService::buildSourceStream()
     QString sourceType = _settings->value("sourceType", "").toString();
 
     if (sourceType == "directory") {
+        if (!mountSourceRoot()) {
+            finishUpload(false, QStringLiteral("Could not bind / to /tmp/backupapp-root"));
+            return;
+        }
+
         QStringList directories = _settings->value("directory", "").toStringList();
 
         _totalBytes = 0;
@@ -133,6 +158,21 @@ QString BackupService::davUrl(const QString &path) const
     return scheme + "://" + _settings->value("webdavHost").toString() + davPath(path);
 }
 
+QString BackupService::replyError(QNetworkReply *reply) const
+{
+    static const QRegularExpression messagePattern(QStringLiteral("<s:message>(.*)</s:message>"));
+
+    const QRegularExpressionMatch message = messagePattern.match(QString::fromUtf8(reply->readAll()));
+    const int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+
+    QString error = QStringLiteral("HTTP %1, %2").arg(statusCode).arg(reply->errorString());
+
+    if (message.hasMatch())
+        error += ": " + message.captured(1);
+
+    return error;
+}
+
 void BackupService::setupWebdav()
 {
     const QWebdav::QWebdavConnectionType type = _settings->value("webdavType").toString().toLower() == "https" ? QWebdav::HTTPS : QWebdav::HTTP;
@@ -161,10 +201,12 @@ void BackupService::onSizeFinished()
     QStringList arguments = {
         QStringLiteral("-czf"),
         QStringLiteral("-"),
+        QStringLiteral("-C"), QStringLiteral("/tmp/backupapp-root"),
         QStringLiteral("--xattrs"), QStringLiteral("--acls"),
     };
 
-    arguments += _settings->value("directory", "").toStringList();
+    for (const QString &directory : _settings->value("directory", "").toStringList())
+        arguments += QDir::cleanPath("/" + directory.trimmed()).mid(1);
 
     _readProcess = new QProcess(this);
     _readProcess->setProcessChannelMode(QProcess::ForwardedErrorChannel);
@@ -186,10 +228,10 @@ void BackupService::startUpload()
 
     _backupExtension = _settings->value("sourceType").toString() == "block" ? QStringLiteral(".img.gz") : QStringLiteral(".tar.gz");
 
-    const QString fileName = _backupPrefix + QDateTime::currentDateTime().toString("yyyy-MM-dd_HH-mm-ss") + _backupExtension;
+    _backupFileName = _backupPrefix + QDateTime::currentDateTime().toString("yyyy-MM-dd_HH-mm-ss") + _backupExtension;
 
     _uploadsBaseUrl = davUrl("/uploads/" + userId + "/backupapp-" + QString::number(QDateTime::currentMSecsSinceEpoch()));
-    _destinationUrl = davUrl("/files/" + userId + _backupDir + fileName);
+    _destinationUrl = davUrl("/files/" + userId + _backupDir + _backupFileName);
 
     _stagingDir = QStringLiteral("/tmp/backupapp-chunks");
     QDir(_stagingDir).removeRecursively();
@@ -217,13 +259,13 @@ void BackupService::startUpload()
 void BackupService::onMkcolFinished()
 {
     const bool success = _mkcolReply->error() == QNetworkReply::NoError;
-    const QString errorString = _mkcolReply->errorString();
+    const QString errorString = success ? QString() : replyError(_mkcolReply);
     const QVariant statusCode = _mkcolReply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
 
     if (success)
         qDebug() << "MKCOL finished, status:" << statusCode;
     else
-        qDebug() << "MKCOL finished, status:" << statusCode << "error:" << _mkcolReply->error();
+        qWarning() << "MKCOL failed:" << errorString;
     qDebug() << "Location:" << _mkcolReply->attribute(QNetworkRequest::RedirectionTargetAttribute);
 
     _mkcolReply->deleteLater();
@@ -318,14 +360,14 @@ void BackupService::tryUploadNextChunk()
 void BackupService::onChunkUploadFinished()
 {
     const bool success = _chunkUploadReply->error() == QNetworkReply::NoError;
-    const QString errorString = _chunkUploadReply->errorString();
+    const QString errorString = success ? QString() : QStringLiteral("Chunk %1: %2").arg(_nextChunkIndex).arg(replyError(_chunkUploadReply));
     const QString uploadedPath = _chunkFile->fileName();
     const QVariant statusCode = _chunkUploadReply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
 
     if (success)
         qDebug() << "chunk" << _nextChunkIndex << "finished, status:" << statusCode;
     else
-        qDebug() << "chunk" << _nextChunkIndex << "finished, status:" << statusCode << "error:" << _chunkUploadReply->error();
+        qWarning() << errorString;
 
     _chunkUploadReply->deleteLater();
     _chunkUploadReply = nullptr;
@@ -377,21 +419,78 @@ void BackupService::finishChunksAndAssemble()
 void BackupService::onMoveFinished()
 {
     const bool success = _moveReply->error() == QNetworkReply::NoError;
-    const QString errorString = _moveReply->errorString();
+    const QString errorString = success ? QString() : replyError(_moveReply);
     const QVariant statusCode = _moveReply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
 
     if (success)
         qDebug() << "MOVE finished, status:" << statusCode;
     else
-        qDebug() << "MOVE finished, status:" << statusCode << "error:" << _moveReply->error();
+        qWarning() << "MOVE failed:" << errorString;
 
     _moveReply->deleteLater();
     _moveReply = nullptr;
+
+    if (!success && QList<int>{502, 504, 524}.contains(statusCode.toInt())) {
+        qDebug() << "MOVE timed out at a proxy, waiting for the server to finish assembling";
+
+        _assemblyDeadlineMs = QDateTime::currentMSecsSinceEpoch() + 60 * 60 * 1000;
+
+        _assemblyPollTimer = new QTimer(this);
+        connect(_assemblyPollTimer, &QTimer::timeout, this, &BackupService::checkAssembledFile);
+        _assemblyPollTimer->start(15000);
+
+        return;
+    }
 
     if (!success) {
         finishUpload(false, errorString);
         return;
     }
+
+    pruneOldBackups();
+}
+
+void BackupService::checkAssembledFile()
+{
+    if (_dirParser)
+        return;
+
+    if (QDateTime::currentMSecsSinceEpoch() > _assemblyDeadlineMs) {
+        finishUpload(false, QStringLiteral("Server did not finish assembling the backup within an hour"));
+        return;
+    }
+
+    _dirParser = new QWebdavDirParser(this);
+    connect(_dirParser, &QWebdavDirParser::finished, this, &BackupService::onAssembledFileChecked);
+
+    qDebug() << "PROPFIND" << _backupDir + _backupFileName;
+
+    if (!_dirParser->getFileInfo(_webdav, _backupDir + _backupFileName)) {
+        _dirParser->deleteLater();
+        _dirParser = nullptr;
+    }
+}
+
+void BackupService::onAssembledFileChecked()
+{
+    bool assembled = false;
+
+    for (const QWebdavItem &item : _dirParser->getList()) {
+        if (!item.isDir() && static_cast<qint64>(item.size()) == _uploadedBytesTotal)
+            assembled = true;
+    }
+
+    _dirParser->deleteLater();
+    _dirParser = nullptr;
+
+    if (!assembled)
+        return;
+
+    qDebug() << "assembled backup found, size:" << _uploadedBytesTotal;
+
+    _assemblyPollTimer->stop();
+    _assemblyPollTimer->deleteLater();
+    _assemblyPollTimer = nullptr;
 
     pruneOldBackups();
 }
@@ -610,6 +709,11 @@ void BackupService::startRsync()
 {
     setStage(Uploading);
 
+    if (!mountSourceRoot()) {
+        finishUpload(false, QStringLiteral("Could not bind / to /tmp/backupapp-root"));
+        return;
+    }
+
     QString port = _settings->value("rsyncPort").toString();
 
     if (port.isEmpty())
@@ -637,7 +741,9 @@ void BackupService::startRsync()
         arguments += {QStringLiteral("-e"), ssh};
 
     arguments += _settings->value("rsyncBackupOptions").toString().split(QLatin1Char(' '), QString::SkipEmptyParts);
-    arguments += _settings->value("directory").toStringList();
+    for (const QString &directory : _settings->value("directory").toStringList())
+        arguments += "/tmp/backupapp-root/." + QDir::cleanPath("/" + directory.trimmed());
+
     arguments += destination;
 
     qDebug() << "rsync" << arguments;
@@ -726,6 +832,12 @@ void BackupService::finishUpload(bool success, const QString &error)
         _chunkPollTimer->stop();
         _chunkPollTimer->deleteLater();
         _chunkPollTimer = nullptr;
+    }
+
+    if (_assemblyPollTimer) {
+        _assemblyPollTimer->stop();
+        _assemblyPollTimer->deleteLater();
+        _assemblyPollTimer = nullptr;
     }
 
     if (_mkcolReply) {
@@ -826,10 +938,43 @@ void BackupService::finishUpload(bool success, const QString &error)
         _webdav = nullptr;
     }
 
+    unmountSourceRoot();
+
     if (!_stagingDir.isEmpty())
         QDir(_stagingDir).removeRecursively();
 
     emit backupFinished(success, error);
+}
+
+bool BackupService::mountSourceRoot()
+{
+    const QByteArray root = QByteArrayLiteral("/tmp/backupapp-root");
+
+    QDir().mkpath(QString::fromLatin1(root));
+
+    if (::mount("/", root.constData(), nullptr, MS_BIND | MS_REC, nullptr) != 0)
+        return false;
+
+    if (::mount(nullptr, root.constData(), nullptr, MS_REC | MS_SLAVE, nullptr) != 0) {
+        ::umount2(root.constData(), MNT_DETACH);
+        return false;
+    }
+
+    _sourceRootMounted = true;
+
+    return true;
+}
+
+void BackupService::unmountSourceRoot()
+{
+    if (!_sourceRootMounted)
+        return;
+
+    ::umount2("/tmp/backupapp-root", MNT_DETACH);
+
+    QDir().rmdir(QStringLiteral("/tmp/backupapp-root"));
+
+    _sourceRootMounted = false;
 }
 
 void BackupService::onTarError(QProcess::ProcessError error)

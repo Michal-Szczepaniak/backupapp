@@ -38,6 +38,8 @@ private slots:
     void onSplitFinished(int exitCode, QProcess::ExitStatus exitStatus);
     void onChunkUploadFinished();
     void onMoveFinished();
+    void checkAssembledFile();
+    void onAssembledFileChecked();
     void onBackupListFinished();
     void onOldBackupRemoved();
     void tryUploadNextChunk();
@@ -52,6 +54,7 @@ private:
     QString profileSlug() const;
     QString davPath(const QString &path) const;
     QString davUrl(const QString &path) const;
+    QString replyError(QNetworkReply *reply) const;
     void setupWebdav();
     void startUpload();
     void startChunkedTransfer();
@@ -63,6 +66,8 @@ private:
     bool validateSourceSettings();
     bool validateRsyncSettings();
     void startRsync();
+    bool mountSourceRoot();
+    void unmountSourceRoot();
 
 private:
     QProcess *_sizeProcess = nullptr;
@@ -79,6 +84,9 @@ private:
     QSettings *_settings = nullptr;
     QTimer *_progressTimer = nullptr;
     QTimer *_chunkPollTimer = nullptr;
+    QTimer *_assemblyPollTimer = nullptr;
+    qint64 _assemblyDeadlineMs = 0;
+    QString _backupFileName;
     QString _stagingDir;
     QString _destinationUrl;
     QString _uploadsBaseUrl;
@@ -92,6 +100,7 @@ private:
     qint64 _uploadedBytesTotal = 0;
     bool _splitFinished = false;
     bool _splitPaused = false;
+    bool _sourceRootMounted = false;
     qint64 _totalBytes = 0;
     qint64 _bytesRead = 0;
     qint64 _lastEtaMs = -1;

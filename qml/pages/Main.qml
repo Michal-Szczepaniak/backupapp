@@ -1,3 +1,22 @@
+/*
+    Copyright (C) 2026 Michał Szczepaniak
+
+    This file is part of backupapp.
+
+    backupapp is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    backupapp is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with backupapp.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
 import QtQuick 2.0
 import Sailfish.Silica 1.0
 import Nemo.KeepAlive 1.2
@@ -8,9 +27,17 @@ Page {
 
     allowedOrientations: Orientation.All
 
+    property real rootFreeBytes: storageInfo.freeBytes("/")
+
     onStatusChanged: {
-        if (status === PageStatus.Active)
+        if (status === PageStatus.Active) {
             profilesRepeater.model = settings.getProfiles()
+            rootFreeBytes = storageInfo.freeBytes("/")
+        }
+    }
+
+    StorageInfoProvider {
+        id: storageInfo
     }
 
     KeepAlive {
@@ -65,6 +92,11 @@ Page {
 
         PullDownMenu {
             MenuItem {
+                text: qsTr("About")
+                onClicked: pageStack.animatorPush(Qt.resolvedUrl("About.qml"))
+            }
+
+            MenuItem {
                 text: qsTr("Settings")
                 onClicked: pageStack.animatorPush(Qt.resolvedUrl("Settings.qml"))
             }
@@ -85,6 +117,17 @@ Page {
 
             PageHeader {
                 title: qsTr("Backupapp")
+            }
+
+            Label {
+                visible: page.rootFreeBytes >= 0 && page.rootFreeBytes < 5 * 1024 * 1024 * 1024
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: parent.width - Theme.horizontalPageMargin*2
+                wrapMode: Text.Wrap
+                color: Theme.errorColor
+                font.pixelSize: Theme.fontSizeSmall
+                text: qsTr("Only %1 GB free on the root partition. A full system restore needs room for a second copy of the system, so you may not be able to restore this backup.")
+                      .arg((page.rootFreeBytes / (1024 * 1024 * 1024)).toFixed(1))
             }
 
             ComboBox {

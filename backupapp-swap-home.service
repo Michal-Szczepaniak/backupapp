@@ -1,0 +1,14 @@
+[Unit]
+Description=Swap in the /home restored by backupapp
+RequiresMountsFor=/home
+After=quota@home.service
+Before=user@100000.service
+ConditionPathIsDirectory=/home/.backup
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/backupapp-swap-home.sh
+
+[Install]
+WantedBy=multi-user.target

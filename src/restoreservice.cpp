@@ -1,11 +1,34 @@
+/*
+    Copyright (C) 2026 Michał Szczepaniak
+
+    This file is part of backupapp.
+
+    backupapp is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    backupapp is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with backupapp.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
 #include "restoreservice.h"
 
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QRegularExpression>
+#include <QStorageInfo>
 #include <algorithm>
+#include <cerrno>
 #include <cstdio>
+#include <cstring>
+#include <sys/mount.h>
 #include <unistd.h>
 
 RestoreService::RestoreService(QObject *parent) : QObject(parent)
@@ -140,6 +163,7 @@ void RestoreService::onGotFilesList()
 void RestoreService::onRestoreFinished(int exitCode, QProcess::ExitStatus exitStatus)
 {
     const bool success = exitStatus == QProcess::NormalExit && exitCode == 0;
+    const bool unstaged = unstageHome();
 
     if (!success) {
         emit error(tr("tar exited with code %1").arg(exitCode));
@@ -153,6 +177,11 @@ void RestoreService::onRestoreFinished(int exitCode, QProcess::ExitStatus exitSt
 
         return;
     } else {
+        if (!unstaged) {
+            emit error(tr("Could not unmount /backup/home, remove it before rebooting"));
+            return;
+        }
+
         if (_fullBackup)
             activateFullRestore();
 
@@ -166,6 +195,8 @@ void RestoreService::onTarError(QProcess::ProcessError error)
     if (error != QProcess::ProcessError::FailedToStart) return;
 
     qDebug() << error;
+
+    unstageHome();
 
     emit this->error(_restoreProcess->errorString());
 
@@ -274,7 +305,12 @@ void RestoreService::restorePartialBackup()
         _restoreProcess = new QProcess(this);
     _restoreProcess->setProcessChannelMode(QProcess::ForwardedErrorChannel);
     _restoreProcess->setProgram(QStringLiteral("tar"));
-    _restoreProcess->setArguments({
+    QStringList members;
+
+    for (const QString &directory : _settings->value("directory").toStringList())
+        members += QDir::cleanPath("/" + directory.trimmed()).mid(1);
+
+    _restoreProcess->setArguments(QStringList{
         QStringLiteral("-xzpf"),
         QStringLiteral("-"),
         QStringLiteral("-C"),
@@ -282,7 +318,7 @@ void RestoreService::restorePartialBackup()
         QStringLiteral("--xattrs"),
         QStringLiteral("--acls"),
         QStringLiteral("--numeric-owner"),
-        });
+        } + members);
 
     connect(_restoreProcess, static_cast<void (QProcess::*)(int, QProcess::ExitStatus)>(&QProcess::finished),this, &RestoreService::onRestoreFinished);
     connect(_restoreProcess, &QProcess::errorOccurred, this, &RestoreService::onTarError);
@@ -319,6 +355,9 @@ void RestoreService::restoreFullBackup()
         return;
     }
 
+    if (!stageHome())
+        return;
+
     if (_restoreProcess) {
         disconnect(_restoreProcess, nullptr, this, nullptr);
         _restoreProcess->kill();
@@ -328,7 +367,12 @@ void RestoreService::restoreFullBackup()
     _restoreProcess = new QProcess(this);
     _restoreProcess->setProcessChannelMode(QProcess::ForwardedErrorChannel);
     _restoreProcess->setProgram(QStringLiteral("tar"));
-    _restoreProcess->setArguments({
+    QStringList members;
+
+    for (const QString &directory : _settings->value("directory").toStringList())
+        members += QDir::cleanPath("/" + directory.trimmed()).mid(1);
+
+    _restoreProcess->setArguments(QStringList{
         QStringLiteral("-xzpf"),
         QStringLiteral("-"),
         QStringLiteral("-C"),
@@ -336,7 +380,7 @@ void RestoreService::restoreFullBackup()
         QStringLiteral("--xattrs"),
         QStringLiteral("--acls"),
         QStringLiteral("--numeric-owner"),
-        });
+        } + members);
 
     connect(_restoreProcess, static_cast<void (QProcess::*)(int, QProcess::ExitStatus)>(&QProcess::finished),this, &RestoreService::onRestoreFinished);
     connect(_restoreProcess, &QProcess::errorOccurred, this, &RestoreService::onTarError);
@@ -366,6 +410,8 @@ void RestoreService::feedBackupData()
         _restoreProcess->kill();
         _restoreProcess->deleteLater();
         _restoreProcess = nullptr;
+
+        unstageHome();
 
         emit error(_backupFileReply->errorString());
         return;
@@ -401,8 +447,18 @@ void RestoreService::activateFullRestore()
 {
     const QString restoredRoot = QStringLiteral("/backup");
     const QString swapJob = QStringLiteral("backupapp-swap-rootfs.sh");
+    const QString fstab = QStringLiteral("/etc/fstab");
 
     QDir().mkpath(restoredRoot + "/etc/oneshot.d/preinit");
+
+    if (QFileInfo::exists(fstab)) {
+        QFile::remove(restoredRoot + fstab);
+
+        if (!QFile::copy(fstab, restoredRoot + fstab)) {
+            emit error(tr("Could not keep %1").arg(fstab));
+            return;
+        }
+    }
 
     const QFileInfoList updates = QDir(restoredRoot + "/var/lib/platform-updates").entryInfoList(QDir::Files);
 
@@ -416,6 +472,38 @@ void RestoreService::activateFullRestore()
 
         if (!QFile::link("/var/lib/platform-updates/" + update.fileName(), link)) {
             emit error(tr("Could not queue %1").arg(update.fileName()));
+            return;
+        }
+    }
+
+    if (_homeStaged) {
+        const QString homeScript = QStringLiteral("backupapp-swap-home.sh");
+        const QString homeService = QStringLiteral("backupapp-swap-home.service");
+        const QString restoredScript = restoredRoot + "/usr/libexec/" + homeScript;
+        const QString restoredService = restoredRoot + "/etc/systemd/system/" + homeService;
+        const QStringList wantedBy = {QStringLiteral("multi-user.target")};
+
+        QDir().mkpath(restoredRoot + "/usr/libexec");
+        QDir().mkpath(restoredRoot + "/etc/systemd/system");
+
+        QFile::remove(restoredScript);
+        QFile::remove(restoredService);
+
+        bool queued = QFile::copy("/usr/share/backupapp/" + homeScript, restoredScript)
+                && QFile::setPermissions(restoredScript, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner | QFile::ReadGroup | QFile::ExeGroup | QFile::ReadOther | QFile::ExeOther)
+                && QFile::copy("/usr/share/backupapp/" + homeService, restoredService);
+
+        for (const QString &target : wantedBy) {
+            const QString wantsDir = restoredRoot + "/etc/systemd/system/" + target + ".wants";
+
+            QDir().mkpath(wantsDir);
+            QFile::remove(wantsDir + "/" + homeService);
+
+            queued = queued && QFile::link("/etc/systemd/system/" + homeService, wantsDir + "/" + homeService);
+        }
+
+        if (!queued) {
+            emit error(tr("Could not queue %1").arg(homeService));
             return;
         }
     }
@@ -452,6 +540,9 @@ void RestoreService::restoreRsyncBackup()
             emit error(tr("Could not create %1").arg(targetDir));
             return;
         }
+
+        if (!stageHome())
+            return;
     }
 
     QString port = _settings->value("rsyncPort").toString();
@@ -542,4 +633,60 @@ void RestoreService::onRsyncOutput()
     _restoreProgress = match.captured(1).toFloat();
 
     emit restoreProgressChanged(_restoreProgress);
+}
+
+bool RestoreService::stageHome()
+{
+    _homeStaged = false;
+
+    const QString home = QStringLiteral("/home");
+    const QString stagingDir = QStringLiteral("/home/.backup");
+    const QString mountPoint = QStringLiteral("/backup/home");
+
+    bool homeListed = false;
+
+    for (const QString &directory : _settings->value("directory").toStringList()) {
+        if (QDir::cleanPath("/" + directory.trimmed()) == home)
+            homeListed = true;
+    }
+
+    if (!homeListed || QStorageInfo(home).rootPath() != home)
+        return true;
+
+    if (!QDir(stagingDir).entryList(QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot).isEmpty()) {
+        emit error(tr("%1 is not empty, remove it before restoring").arg(stagingDir));
+        return false;
+    }
+
+    if (!QDir().mkpath(stagingDir) || !QDir().mkpath(mountPoint)) {
+        emit error(tr("Could not create %1").arg(stagingDir));
+        return false;
+    }
+
+    if (::mount(stagingDir.toLocal8Bit().constData(), mountPoint.toLocal8Bit().constData(), nullptr, MS_BIND, nullptr) != 0) {
+        const QString reason = QString::fromLocal8Bit(strerror(errno));
+
+        QDir().rmdir(mountPoint);
+
+        emit error(tr("Could not bind %1 to %2: %3").arg(stagingDir, mountPoint, reason));
+        return false;
+    }
+
+    _homeStaged = true;
+
+    return true;
+}
+
+bool RestoreService::unstageHome()
+{
+    if (!_homeStaged)
+        return true;
+
+    const QString mountPoint = QStringLiteral("/backup/home");
+
+    ::umount2(mountPoint.toLocal8Bit().constData(), MNT_DETACH);
+
+    QDir().rmdir(mountPoint);
+
+    return !QFileInfo::exists(mountPoint);
 }

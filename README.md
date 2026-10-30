@@ -178,8 +178,10 @@ Don't list `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/data`, `/mnt` or Android p
 1. extracts the backup into `/backup` (it must not exist or must be empty)
 2. queues each executable in `/backup/var/lib/platform-updates` (e.g. `flash-bootimg.sh`) as a preinit oneshot of
    the restored system
-3. queues `/usr/lib/oneshot.d/backupapp-swap-rootfs.sh` as a preinit oneshot of the running system
-4. asks you to reboot
+3. if `/home` is listed and is its own mount, extracts it into `/home/.backup` instead (bind-mounted at `/backup/home`
+   during the restore), and enables `backupapp-swap-home.service` in the restored system
+4. queues `/usr/lib/oneshot.d/backupapp-swap-rootfs.sh` as a preinit oneshot of the running system
+5. asks you to reboot
 
 **On the next boots:**
 
@@ -188,7 +190,10 @@ Don't list `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/data`, `/mnt` or Android p
    left alone. The move uses the backup's own `mv` and dynamic loader, because the old ones are already deleted
    at that point. preinit then reboots.
 2. The restored system's preinit runs the platform updates and reboots.
-3. The restored system boots normally.
+3. The restored system boots. If `/home` was staged, `backupapp-swap-home.service` runs after `/home` is mounted and
+   before `user@100000.service`: it `rm -rf`s everything in `/home` except `.backup`, `lost+found` and the quota
+   files (`aquota.*`, which the kernel keeps open while `/home` is mounted with quotas), moves the contents of
+   `/home/.backup` into `/home`, and then deletes the service and its script. It runs only once, even if it fails.
 
 **Things to know:**
 

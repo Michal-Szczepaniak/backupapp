@@ -50,6 +50,8 @@ private:
     void restoreFullBackup();
     void activateFullRestore();
     void restoreRsyncBackup();
+    bool stageHome();
+    bool unstageHome();
 
 private:
     QSettings *_settings = nullptr;
@@ -58,6 +60,7 @@ private:
     QProcess *_restoreProcess = nullptr;
     QString _backupFile{};
     bool _fullBackup = false;
+    bool _homeStaged = false;
     QNetworkReply *_backupFileReply = nullptr;
     QByteArray _rsyncOutput;
     float _restoreProgress = 0;
