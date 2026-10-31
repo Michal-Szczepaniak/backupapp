@@ -96,7 +96,7 @@ void BackupService::buildSourceStream()
         _sizeProcess = new QProcess(this);
         _sizeProcess->setProcessChannelMode(QProcess::ForwardedErrorChannel);
         _sizeProcess->setProgram(QStringLiteral("du"));
-        _sizeProcess->setArguments(QStringList{QStringLiteral("-scb")} + directories);
+        _sizeProcess->setArguments(QStringList{QStringLiteral("-scb"), QStringLiteral("-x")} + directories);
 
         connect(_sizeProcess, static_cast<void (QProcess::*)(int, QProcess::ExitStatus)>(&QProcess::finished),
                 this, &BackupService::onSizeFinished);
@@ -203,6 +203,7 @@ void BackupService::onSizeFinished()
         QStringLiteral("-"),
         QStringLiteral("-C"), QStringLiteral("/tmp/backupapp-root"),
         QStringLiteral("--xattrs"), QStringLiteral("--acls"),
+        QStringLiteral("--one-file-system"),
     };
 
     for (const QString &directory : _settings->value("directory", "").toStringList())
@@ -735,6 +736,7 @@ void BackupService::startRsync()
         QStringLiteral("-aAXHR"),
         QStringLiteral("--info=progress2"),
         QStringLiteral("--no-inc-recursive"),
+        QStringLiteral("--one-file-system"),
     };
 
     if (!host.isEmpty())
